@@ -1,23 +1,23 @@
-**Computational Pipeline for B-Cell–Targeted Drug Repurposing in Multiple Sclerosi**s
-**Overview**
+**Computational Pipeline for B-Cell–Targeted Drug Repurposing in Multiple Sclerosi**
 
-__This repository contains a comprehensive computational pipeline integrating transcriptomics, network pharmacology, molecular docking, molecular dynamics (MD), virtual screening, and ADME/Tox profiling to identify B-cell hub genes and repurposable drug candidates for Multiple Sclerosis (MS). The workflow is fully documented to ensure reproducibility and transparency._
+**Overview**
+_This repository presents a comprehensive computational pipeline for B-cell–targeted drug repurposing in Multiple Sclerosis (MS), integrating transcriptomic analysis, network pharmacology, molecular docking, molecular dynamics (MD), virtual screening, and ADME/Tox profiling. The workflow begins with GEO-based data acquisition and preprocessing using R (v4.3.0) and Bioconductor (v3.18), followed by differential expression analysis (limma/GEO2R) to identify significant DEGs. High-confidence hub genes are then mapped via STRING and visualized with Cytoscape, with modules detected using MCODE. Potential therapeutic compounds are screened and docked using AutoDock Vina and Glide, and the top hits are further validated through 100 ns MD simulations in Desmond with OPLS_2005 force field. Finally, ADME/Tox profiling (SwissADME, pkCSM) evaluates pharmacokinetic and toxicity properties. All scripts, software versions, parameters, and processing steps are fully documented to ensure reproducibility and transparency, making this repository a robust resource for researchers exploring B-cell–centric therapeutics in MS._
 _
 **Repository Contents**
 
-Data_Preprocessing/ – R scripts for GEO data preprocessing and differential expression analysis.
+****Data_Preprocessing/** **– R scripts for GEO data preprocessing and differential expression analysis.
 
-PPI_Network/ – Cytoscape session files, STRING network data, and module detection results.
+**PPI_Network/** – Cytoscape session files, STRING network data, and module detection results.
 
-Docking/ – AutoDock Vina and Glide docking input/output files.
+**Docking/** – AutoDock Vina and Glide docking input/output files.
 
-MD_Simulation/ – Desmond MD input files and trajectory outputs.
+**MD_Simulation/** – Desmond MD input files and trajectory outputs.
 
-Virtual_Screening/ – LigPrep-prepared ligands, Glide docking results, and top compound lists.
+**Virtual_Screening**/ – LigPrep-prepared ligands, Glide docking results, and top compound lists.
 
-ADMET_Analysis/ – SwissADME and pkCSM results with drug-likeness and toxicity predictions.
+**ADMET_Analysis/** – SwissADME and pkCSM results with drug-likeness and toxicity predictions.
 
-README.md – This file, describing the project, workflow, and methodology.
+**README.md** – This file, describing the project, workflow, and methodology.
 
 **Computational Workflow**
 **1. Data Acquisition & Preprocessing**

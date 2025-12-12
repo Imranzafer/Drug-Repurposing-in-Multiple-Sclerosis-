@@ -1,0 +1,154 @@
+# --- R SCRIPT FOR DIFFERENTIAL EXPRESSION ANALYSIS (DEG) ---
+# Project: MS Computational Pipeline
+# Purpose: Identify Differentially Expressed Genes (DEGs) between MS Patients and Controls
+# Accession: GSE21942 (Affymetrix Human Genome U133 Plus 2.0 Array / GPL570)
+# Method: Robust Multi-Array Average (RMA) followed by limma linear modelling.
+# Date: December 2025
+
+# ==============================================================================
+# 0. SETUP AND LIBRARY LOADING
+# ==============================================================================
+
+# Ensure R (v4.3.0) and Bioconductor (v3.18) compatibility is met.
+# Install packages if not present:
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+required_packages <- c("affy", "limma", "hgu133plus2.db", "dplyr")
+BiocManager::install(required_packages, update = FALSE, ask = FALSE)
+
+# Load required libraries
+library(affy)       # For reading CEL files and RMA normalization
+library(limma)      # For linear modelling and empirical Bayes statistics
+library(hgu133plus2.db) # Annotation package for the GPL570 platform
+library(dplyr)      # For data manipulation and filtering
+
+# Define Filtering Parameters (as per manuscript section 2.2)
+P_ADJUST_METHOD <- "BH"  # Benjamini-Hochberg method to control False Discovery Rate (FDR)
+P_VALUE_CUTOFF  <- 0.05  # Adjusted p-value threshold for significance
+LOG2FC_CUTOFF   <- 1.5   # Absolute log2 fold change threshold for biological significance
+
+# ==============================================================================
+# 1. DATA ACQUISITION AND PREPROCESSING (RMA)
+# ==============================================================================
+
+print("STEP 1: Reading raw data and performing RMA normalization...")
+
+# Read CEL files from the working directory. 
+# NOTE: User must download and place all .CEL files for GSE21942 here.
+raw_data <- ReadAffy()
+
+# Apply Robust Multi-Array Average (RMA) algorithm.
+# This performs background correction, quantile normalization, and summarization
+# to convert raw probe intensities into log2-transformed expression data.
+# This is a standard procedure for Affymetrix arrays (Section 2.1).
+rma_data <- rma(raw_data)
+expression_matrix <- exprs(rma_data)
+
+# RMA output is already on the log2 scale, so no explicit log2 transform is needed.
+# log2_expression_data <- expression_matrix
+
+# ==============================================================================
+# 2. PROBE ANNOTATION AND INITIAL FILTERING
+# ==============================================================================
+
+print("STEP 2: Annotating probes and handling multiple mapping...")
+
+probe_id <- rownames(expression_matrix)
+
+# Map Affymetrix Probe IDs to official HUGO Gene Symbols (SYMBOL) using the
+# hgu133plus2.db package specific to the GPL570 platform.
+gene_symbols <- select(hgu133plus2.db,
+                       keys = probe_id,
+                       columns = c("SYMBOL", "GENENAME"),
+                       keytype = "PROBEID")
+
+# Merge expression data with annotation data
+annotated_data <- merge(as.data.frame(expression_matrix), gene_symbols, 
+                        by.x = "row.names", by.y = "PROBEID")
+colnames(annotated_data)[1] <- "PROBEID"
+
+# Filter: Remove probes with no corresponding annotated genes (NA values in SYMBOL)
+annotated_data_filtered <- na.omit(annotated_data)
+
+# Handle probes that map to the same gene symbol.
+# Common practice: Keep the probe with the highest mean expression across all samples.
+# This ensures a unique value per gene.
+final_expression_data <- annotated_data_filtered %>%
+  group_by(SYMBOL) %>%
+  # Calculate the mean expression across all samples for each probe within the group
+  mutate(mean_expression = rowMeans(select(., starts_with("GSM")))) %>%
+  # Select only the row (probe) with the maximum mean expression for each gene symbol
+  filter(mean_expression == max(mean_expression)) %>%
+  ungroup() %>%
+  # Select relevant columns for differential analysis
+  select(SYMBOL, starts_with("GSM")) %>%
+  filter(SYMBOL != "") # Final cleanup of any potential empty symbols
+
+# Prepare the final matrix for limma (rownames are symbols, columns are samples)
+final_matrix <- as.matrix(final_expression_data %>% select(starts_with("GSM")))
+rownames(final_matrix) <- final_expression_data$SYMBOL
+
+# ==============================================================================
+# 3. DIFFERENTIAL EXPRESSION ANALYSIS (limma)
+# ==============================================================================
+
+print("STEP 3: Running limma linear model and empirical Bayes moderation...")
+
+# NOTE: The grouping MUST accurately reflect the GSM IDs in your matrix based on GEO metadata.
+# Example: The first 15 columns are MS patients, the next 15 are healthy controls.
+# User MUST adapt sample names/order if necessary.
+sample_groups <- c(rep("MS", 15), rep("Control", 15)) 
+groups <- factor(sample_groups, levels = c("Control", "MS"))
+
+# Create Design Matrix: Defines which columns belong to which group
+design <- model.matrix(~0 + groups)
+colnames(design) <- levels(groups) # Columns are named 'Control' and 'MS'
+
+# 3a. Fit the linear model to the expression data
+fit <- lmFit(final_matrix, design)
+
+# 3b. Define Contrast Matrix: Specifies the comparison of interest (MS vs. Control)
+# Contrast is calculated as the difference between the 'MS' group and the 'Control' group
+contrast_matrix <- makeContrasts(MS_vs_Control = MS - Control, levels = design)
+
+# Apply contrast matrix to the fitted model
+fit2 <- contrasts.fit(fit, contrast_matrix)
+
+# 3c. Apply Empirical Bayes Moderation (Key step in limma)
+# This borrows information across all genes to make the variance estimates more robust,
+# especially in studies with small sample sizes.
+fit2 <- eBayes(fit2)
+
+# ==============================================================================
+# 4. RESULTS EXTRACTION AND FILTERING
+# ==============================================================================
+
+print("STEP 4: Extracting results and applying statistical/biological thresholds...")
+
+# Extract top results table for the MS_vs_Control contrast
+# number=Inf: extracts all genes. adjust.method="BH": uses Benjamini-Hochberg FDR correction.
+all_genes_results <- topTable(fit2, 
+                              coef = "MS_vs_Control", 
+                              number = Inf, 
+                              adjust.method = P_ADJUST_METHOD)
+
+# Apply strict filtering criteria (Section 2.2):
+# 1. Adjusted p-value (FDR) < 0.05 (Statistical Robustness)
+# 2. Absolute log2 Fold Change (|log2FC|) >= 1.5 (Biological Significance)
+deg_list <- all_genes_results %>%
+  filter(adj.P.Val < P_VALUE_CUTOFF & abs(logFC) >= LOG2FC_CUTOFF)
+
+# ==============================================================================
+# 5. FINAL OUTPUT
+# ==============================================================================
+
+# Save the final table of DEGs
+output_filename <- paste0("DEGs_Filtered_P", P_VALUE_CUTOFF, "_FC", LOG2FC_CUTOFF, ".csv")
+write.csv(deg_list, output_filename, row.names = TRUE)
+
+print(paste("-------------------------------------------------------"))
+print(paste("Total identified DEGs:", nrow(deg_list)))
+print(paste("Results saved to:", output_filename))
+print(paste("Script execution complete."))
+# ------------------------------------------------------------------------------

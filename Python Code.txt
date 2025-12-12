@@ -1,0 +1,128 @@
+# --- PYTHON SCRIPT FOR MOLECULAR DYNAMICS (MD) POST-PROCESSING ---
+# Project: MS Computational Pipeline
+# Purpose: Calculate RMSD and RMSF metrics for stability analysis
+# Tool: MDTraj (v1.9.9)
+# Input: Desmond topology (.cms) and production trajectory (.dcd)
+# Date: December 2025
+
+# ==============================================================================
+# 0. SETUP AND LIBRARY LOADING
+# ==============================================================================
+
+# Note: Requires MDTraj (pip install mdtraj)
+import mdtraj as md     # The core library for trajectory analysis
+import numpy as np      # For numerical operations
+import pandas as pd     # For saving results to CSV
+import sys              # For handling command-line arguments
+
+# Set the standard ligand residue name used in the simulation setup (Section 2.11)
+LIGAND_RESNAME = 'LIG' 
+
+# ==============================================================================
+# 1. ARGUMENT PARSING AND TRAJECTORY LOADING
+# ==============================================================================
+
+try:
+    # 1st argument: Topology file (often the last frame of setup or minimization)
+    topology_file = sys.argv[1] 
+    # 2nd argument: Trajectory file (the 100ns production run)
+    trajectory_file = sys.argv[2] 
+except IndexError:
+    print("ERROR: Missing command-line arguments.")
+    print("Usage: python MD_PostAnalysis.py <topology_file.cms> <trajectory_file.dcd>")
+    sys.exit(1)
+
+print(f"Loading trajectory from {trajectory_file} using topology {topology_file}...")
+
+# Load the trajectory. MDTraj handles Desmond's .cms and .dcd files.
+# The `top` argument ensures the correct atom/residue definitions are used.
+traj = md.load(trajectory_file, top=topology_file)
+
+# Convert time from picoseconds (ps) to nanoseconds (ns) for plotting
+time_ns = traj.time / 1000.0 
+
+# Define the reference frame for RMSD calculations (usually the first frame)
+REFERENCE_FRAME = 0
+
+# ==============================================================================
+# 2. RMSD CALCULATION (Root Mean Square Deviation)
+# ==============================================================================
+# RMSD measures the deviation of a structure from a reference over time.
+
+print("Calculating RMSD...")
+
+# --- Selection Indices ---
+# We use atom selection syntax (similar to VMD/PyMOL)
+# Protein alignment selection (used for fitting/superposition)
+protein_alignment_atoms = traj.select('protein and backbone')
+# Ligand heavy atom selection (used for ligand RMSD calculation)
+ligand_atoms = traj.select(f'resname {LIGAND_RESNAME} and not element H')
+
+if len(protein_alignment_atoms) == 0:
+    print("CRITICAL ERROR: No protein backbone atoms found. Check topology.")
+    sys.exit(1)
+
+# 2a. Protein Backbone RMSD
+# Alignment: Superpose the entire trajectory onto the reference frame (frame 0) 
+# using the protein backbone atoms. This removes rotational and translational motion.
+traj.superpose(traj, index=REFERENCE_FRAME, atom_indices=protein_alignment_atoms)
+
+# Calculation: Compute the RMSD of the protein backbone *after* alignment.
+rmsd_backbone = md.rmsd(traj, traj, frame=REFERENCE_FRAME, atom_indices=protein_alignment_atoms)
+
+# 2b. Ligand Heavy Atom RMSD
+if len(ligand_atoms) > 0:
+    # The ligand RMSD is calculated using the trajectory that was already aligned 
+    # based on the protein backbone (ensuring relative motion is captured).
+    rmsd_ligand = md.rmsd(traj, traj, frame=REFERENCE_FRAME, atom_indices=ligand_atoms)
+else:
+    print(f"Warning: Ligand '{LIGAND_RESNAME}' not found. Ligand RMSD skipped.")
+    rmsd_ligand = np.zeros_like(rmsd_backbone) # Placeholder array
+
+# ==============================================================================
+# 3. RMSF CALCULATION (Root Mean Square Fluctuation)
+# ==============================================================================
+# RMSF measures the average distance a specific atom or residue deviates from 
+# its reference position over the trajectory, indicating flexibility.
+
+print("Calculating RMSF...")
+
+# Selection: Protein C-alpha (CA) atoms are standard for measuring residue mobility.
+protein_ca_atoms = traj.select('protein and name CA') 
+
+if len(protein_ca_atoms) > 0:
+    # RMSF requires alignment to the average structure or reference frame (here, frame 0)
+    # The calculation returns fluctuation values in nanometers (nm).
+    rmsf_values = md.rmsf(traj, traj, frame=REFERENCE_FRAME, atom_indices=protein_ca_atoms)
+    
+    # Map the RMSF values back to the residue sequence numbers
+    residues = [r.resSeq for r in traj.topology.residues if r.name != 'HOH' and r.is_protein]
+    
+    rmsf_df = pd.DataFrame({
+        'Residue_Index': residues[:len(rmsf_values)], # Ensure length matches CA atoms
+        'RMSF_nm': rmsf_values
+    })
+    
+    # Save RMSF results
+    rmsf_df.to_csv('MD_Analysis_Results_RMSF.csv', index=False)
+    print("-> RMSF data saved to MD_Analysis_Results_RMSF.csv")
+
+# ==============================================================================
+# 4. FINAL OUTPUT AND SAVING
+# ==============================================================================
+
+# Combine RMSD results into a single DataFrame
+rmsd_df = pd.DataFrame({
+    'Time_ns': time_ns,
+    'Backbone_RMSD_nm': rmsd_backbone,
+    'Ligand_Heavy_RMSD_nm': rmsd_ligand
+})
+
+# Save RMSD results
+rmsd_df.to_csv('MD_Analysis_Results_RMSD.csv', index=False)
+print("-> RMSD data saved to MD_Analysis_Results_RMSD.csv")
+print("Script execution successfully completed.")
+
+# Final check: Confirm the output files are now available for plotting and interpretation
+# in the 04_MD_Simulation directory.
+# ------------------------------------------------------------------------------
